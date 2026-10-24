@@ -1,0 +1,6 @@
+[build]
+  command = "npm run build"
+
+# Netlify detecta Next.js automáticamente y utiliza su adaptador OpenNext mantenido.
+# No convertir este proyecto a exportación estática: las rutas API y el flujo de pedidos
+# necesitan ejecución en servidor.

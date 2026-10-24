@@ -1,0 +1,55 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { ArrowRight, Check, Copy, MessageCircle } from "lucide-react";
+import { useCart } from "@/components/cart-provider";
+import { formatUYU } from "@/lib/format";
+import type { OrderLine } from "@/lib/types";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
+import { toWhatsAppNumber } from "@/lib/format";
+
+type PaymentDetails = { holder: string; bank: string; account: string };
+type OrderResult = { order_number: string; access_token: string; total: number; items: OrderLine[]; status: string };
+const shippingOptions = ["La Nave", "UES", "Norteño", "Correo Uruguayo", "Otra empresa"];
+
+export default function CheckoutPage() {
+  const { items, total, count, clearCart, hydrated } = useCart();
+  const [fullName,setFullName] = useState(""); const [phone,setPhone] = useState(""); const [department,setDepartment] = useState("Salto"); const [locality,setLocality] = useState("Villa Constitución"); const [address,setAddress] = useState(""); const [postalCode,setPostalCode] = useState(""); const [shippingCompany,setShippingCompany] = useState("UES"); const [shippingOther,setShippingOther] = useState(""); const [notes,setNotes] = useState("");
+  const [contactPhone,setContactPhone] = useState("099 782 589");
+  useEffect(()=>{const sb=getSupabaseBrowserClient();if(sb)sb.from("store_settings").select("phone").eq("id",1).maybeSingle().then(({data})=>{if(data?.phone)setContactPhone(data.phone);});},[]);
+  const whatsappUrl = `https://wa.me/${toWhatsAppNumber(contactPhone)}`;
+  const [busy,setBusy] = useState(false); const [error,setError] = useState(""); const [order,setOrder] = useState<OrderResult|null>(null); const [payment,setPayment] = useState<PaymentDetails|null>(null); const [paymentNote,setPaymentNote] = useState("");
+  async function submit(e:React.FormEvent) {
+    e.preventDefault(); setError("");
+    if (!items.length) { setError("Tu carrito está vacío."); return; }
+    setBusy(true);
+    try {
+      const response = await fetch("/api/orders", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ customer:{full_name:fullName,phone,department,locality,address,postal_code:postalCode}, items:items.map((item)=>({product_id:item.product.id,quantity:item.quantity})), shipping_company:shippingCompany, shipping_other:shippingOther, notes, payment_method:"transferencia" }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "No se pudo registrar el pedido. Revisá los datos e intentá otra vez.");
+      setOrder(body.order as OrderResult);
+      clearCart();
+      try {
+        const payRes = await fetch("/api/orders/payment-details", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({order_number:body.order.order_number,access_token:body.order.access_token})});
+        const payBody = await payRes.json();
+        if (payRes.ok && payBody.payment) setPayment(payBody.payment);
+        else setPaymentNote(payBody.message || "El pedido quedó registrado. Escribinos para recibir las instrucciones de transferencia.");
+      } catch { setPaymentNote("El pedido quedó registrado. Escribinos para recibir las instrucciones de transferencia."); }
+    } catch (err) { setError(err instanceof Error ? err.message : "Ocurrió un error inesperado."); }
+    finally { setBusy(false); }
+  }
+  async function copy(value:string) { try { await navigator.clipboard.writeText(value); setPaymentNote("Dato copiado."); } catch { setPaymentNote("No se pudo copiar automáticamente; mantené presionado el dato para copiarlo."); } }
+
+  if (!hydrated) return <div className="loading-screen">Cargando el pedido…</div>;
+  if (order) {
+    const productsText = order.items.map((item) => `${item.quantity} x ${item.product_name} (${item.sku}): ${formatUYU(item.line_total)}`).join("\n");
+    const whatsAppText = `Hola Margarita's Glow, acabo de realizar el pedido ${order.order_number}.\n\nProductos:\n${productsText}\n\nTotal de productos: ${formatUYU(order.total)}\nCliente: ${fullName}\nTeléfono: ${phone}\nDestino: ${locality}, ${department}\nDirección: ${address || "A coordinar"}\nTransporte preferido: ${shippingCompany}${shippingCompany === "Otra empresa" ? ` (${shippingOther})` : ""}\n\nQuiero coordinar el envío y enviar el comprobante de transferencia.`;
+    return <section className="order-confirmation"><div className="confirmation-icon"><Check size={28}/></div><div className="eyebrow" style={{justifyContent:"center"}}>PEDIDO REGISTRADO</div><h1>¡Gracias por tu compra!</h1><p>Tu pedido quedó registrado. La tienda revisará los datos, la disponibilidad del transporte y el costo del envío antes de coordinar la entrega.</p><div className="order-number">N.º {order.order_number}</div><div className="confirmation-items"><h2>Detalle de tu pedido</h2>{order.items.map((item,i)=><div key={`${item.sku}-${i}`} className="confirmation-row"><span>{item.quantity} × {item.product_name}</span><strong>{formatUYU(item.line_total)}</strong></div>)}<div className="summary-line total"><span>Total de productos</span><span>{formatUYU(order.total)}</span></div><p className="field-hint">Costo de envío: pendiente de confirmación.</p></div>{payment ? <div className="bank-details"><h3>Datos para la transferencia</h3><p className="admin-muted">Usá estos datos para pagar el pedido y después enviá el comprobante por WhatsApp.</p>{[{label:"Titular",value:payment.holder},{label:"Banco",value:payment.bank},{label:"Número de cuenta",value:payment.account}].map((field)=><div className="bank-field" key={field.label}><span>{field.label}<br/><strong>{field.value}</strong></span><button onClick={()=>copy(field.value)}><Copy size={13} style={{display:"inline",marginRight:4}}/>Copiar</button></div>)}{paymentNote && <p className="field-hint">{paymentNote}</p>}</div> : <div className="notice" style={{textAlign:"left",marginTop:18}}>{paymentNote || "Las instrucciones de transferencia estarán disponibles al completar la configuración del banco. No realices el pago hasta confirmar los datos con la tienda."}</div>}<a className="button button-primary" style={{marginTop:22}} href={`${whatsappUrl}?text=${encodeURIComponent(whatsAppText)}`} target="_blank" rel="noreferrer"><MessageCircle size={16}/> Coordinar por WhatsApp</a><p style={{marginTop:17}}><Link className="text-link" href="/productos">Volver a la tienda <ArrowRight size={15}/></Link></p></section>;
+  }
+  if (!items.length) return <section className="content-container"><div className="empty-state"><div className="empty-flower">✿</div><h2>No hay productos para finalizar</h2><p className="admin-muted">Agregá al menos un producto antes de continuar.</p><Link className="button button-primary" href="/productos">Volver al catálogo</Link></div></section>;
+  return <><section className="page-hero"><div className="eyebrow"><span className="eyebrow-line"/> ÚLTIMO PASO</div><h1>Coordinemos tu <em>pedido.</em></h1><p>Completá los datos para que podamos preparar el pedido y confirmar los detalles de la entrega.</p></section><section className="content-container"><form className="checkout-layout" onSubmit={submit} noValidate><div><section className="form-section"><h2>1. Tus datos</h2><p>Los usaremos para comunicarnos y coordinar la entrega de tu pedido.</p><div className="form-grid"><div className="form-field full"><label htmlFor="fullName">Nombre y apellido *</label><input id="fullName" value={fullName} onChange={(e)=>setFullName(e.target.value)} minLength={2} maxLength={100} required autoComplete="name"/></div><div className="form-field"><label htmlFor="phone">Teléfono *</label><input id="phone" value={phone} onChange={(e)=>setPhone(e.target.value)} required maxLength={30} autoComplete="tel" placeholder="099 000 000"/></div><div className="form-field"><label htmlFor="department">Departamento *</label><input id="department" value={department} onChange={(e)=>setDepartment(e.target.value)} required maxLength={80}/></div><div className="form-field"><label htmlFor="locality">Localidad *</label><input id="locality" value={locality} onChange={(e)=>setLocality(e.target.value)} required maxLength={100}/></div><div className="form-field"><label htmlFor="postalCode">Código postal</label><input id="postalCode" value={postalCode} onChange={(e)=>setPostalCode(e.target.value)} maxLength={20} autoComplete="postal-code"/></div><div className="form-field full"><label htmlFor="address">Dirección de entrega (si corresponde)</label><input id="address" value={address} onChange={(e)=>setAddress(e.target.value)} maxLength={200} autoComplete="street-address" placeholder="Calle, número y referencias"/></div></div></section>
+      <section className="form-section"><h2>2. Transporte</h2><p>Indicá tu preferencia. La disponibilidad y el costo se confirman antes de coordinar el envío.</p><div className="form-grid"><div className="form-field full"><label htmlFor="shipping">Empresa de transporte preferida *</label><select id="shipping" value={shippingCompany} onChange={(e)=>setShippingCompany(e.target.value)}>{shippingOptions.map((opt)=><option key={opt}>{opt}</option>)}</select></div>{shippingCompany==="Otra empresa"&&<div className="form-field full"><label htmlFor="shippingOther">¿Cuál empresa?</label><input id="shippingOther" value={shippingOther} onChange={(e)=>setShippingOther(e.target.value)} required minLength={2}/></div>}<div className="form-field full"><label htmlFor="notes">Indicaciones adicionales</label><textarea id="notes" value={notes} onChange={(e)=>setNotes(e.target.value)} maxLength={1000} placeholder="Horarios, referencias o cualquier detalle útil"/></div></div></section>
+      <section className="form-section"><h2>3. Método de pago</h2><p>Por el momento, el método configurado es la transferencia bancaria manual.</p><label className="radio-card"><input type="radio" checked readOnly/><span><strong>Transferencia bancaria (BROU)</strong><small>Los datos se mostrarán después de registrar el pedido. El pago se confirmará manualmente cuando se revise el comprobante.</small></span></label></section>{error&&<p className="form-error" role="alert">{error}</p>}<button className="button button-primary" type="submit" disabled={busy}>{busy?"Registrando pedido…":"Confirmar pedido"} <ArrowRight size={16}/></button></div>
+    <aside className="summary-card"><h2>Tu pedido</h2>{items.map(({product,quantity})=><div className="summary-line" key={product.id}><span>{quantity} × {product.name}</span><strong>{formatUYU(quantity*product.price)}</strong></div>)}<div className="summary-line"><span>Envío</span><span>A confirmar</span></div><div className="summary-line total"><span>Total de productos</span><span>{formatUYU(total)}</span></div><p>{count} unidad{count===1?"":"es"} en tu pedido.</p><div className="notice">Enviar el formulario no significa que el pedido esté pagado. Te confirmaremos la disponibilidad y el envío por el canal de contacto.</div></aside></form></section></>;
+}
